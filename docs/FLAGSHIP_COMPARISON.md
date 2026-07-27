@@ -42,3 +42,28 @@ At synthesis stage on a predictive PDK, an academic 20-op SIMT core lands **with
 2. Power/PPA are post-synthesis (Genus, default switching activity); post-route numbers pending (Innovus jobs in flight).
 3. Aurora lanes are 32-bit integer SIMT (20-op ISA), not IEEE FP32 — throughput comparisons are ops-vs-FLOPs.
 4. No memory subsystem (HBM PHY/controllers) in Aurora's area/power; flagships carry it on-die/package.
+
+## v2 architecture result (SRAM register file) — synthesized 2026-07-27
+
+The v1 critique ("46% of the SM is a flop-built register file") is now fixed
+in silicon-ready form. v2 replaces the flop RF with 12× 1R1W SRAM macros
+(3 read copies × 4 banks, issue-stage sync reads, WB lane-merge), verified
+functionally (AURORA_SMOKE_PASS) and synthesized at a valid 1 GHz constraint
+(Genus job 515040, 8h14m, ASAP7 CCS):
+
+| Metric | v1 sm_core | v2 sm_core | Δ |
+|---|---|---|---|
+| Leaf cells | 3,637,886 | 2,102,408 | **−42%** |
+| Area (incl. 12 SRAM macros, 35,086 µm²) | 0.365 mm² | 0.229 mm² | **−37%** |
+| Worst slack @1 GHz | −65 ps (Fmax ≈ 940 MHz) | **0 ps — MET, 1.0 GHz** | closes timing |
+| Synthesis power @1 GHz | 0.882 W | 0.229 W* | −74%* |
+
+\* v2 power includes SRAM macros only via the fakeram-derived liberty (crude
+power model); treat the split as logic-accurate, macro-approximate. Even
+excluding the RF comparison entirely, the removed 1.49M-instance flop RF
+(0.168 mm², ~half the v1 dynamic power) dominates the delta.
+
+Per-GPU rollup (4 SMs): v2 saves ~0.55 mm² and reaches the 1 GHz target that
+v1 missed by 6%. The efficiency-normalized comparison vs flagships improves
+by the same ~1.6× area factor; the architectural gap analysis (SIMT width,
+no tensor units, no memory hierarchy beyond L2) is unchanged.
