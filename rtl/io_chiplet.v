@@ -7,9 +7,9 @@
 //    manual kernel launch -- the full v1 host map is preserved).
 //  - command processor registers: broadcast imem writes + launch to compute
 //    chiplets over sideband, aggregate idle status.
-//  - global memory controller: round-robin over NUM_CCHIP D2D endpoints,
-//    backed by an on-die scratch acting as the DRAM model boundary (a real
-//    flagship replaces this bank with an HBM/LPDDR PHY + controller IP).
+//  - global memory: round-robin over NUM_CCHIP D2D endpoints + the host
+//    window, funneled into an HBM3 pseudo-channel controller (hbm_ctrl:
+//    real bank-state machine; hbm3_phy: hard-IP boundary, behavioral in sim).
 //
 // CPU memory map                        | external Wishbone map (unchanged +C)
 //   0x0000_0000  boot RAM (16 KB)       |   0x0000_0000  gmem window
@@ -21,7 +21,6 @@
 `include "aurora_pkg.vh"
 
 module io_chiplet #(
-    parameter GMEM_WORDS = 16384,
     parameter BOOT_WORDS = 4096
 )(
     input  wire        clk,
@@ -51,9 +50,6 @@ module io_chiplet #(
     output wire [`NUM_CCHIP*16-1:0] d2d_tx_d,
     output wire [`NUM_CCHIP-1:0]    d2d_tx_v
 );
-    // ---------------- global memory (DRAM-model boundary) ----------------
-    reg [31:0] gmem [0:GMEM_WORDS-1];
-
     // ---------------- boot RAM (CPU code + data) ----------------
     reg [31:0] bootram [0:BOOT_WORDS-1];
 `ifdef AURORA_SIM
@@ -84,7 +80,7 @@ module io_chiplet #(
         end
     endgenerate
 
-    // ---------------- memory controller: round-robin ----------------
+    // -------- memory front: D2D round-robin + host window -> HBM --------
     reg [1:0] mgrant;
     integer i;
     reg [1:0] mnxt; reg mfound;
@@ -96,23 +92,61 @@ module io_chiplet #(
             end
     end
 
-    wire [31:0] m_addr  = ep_addr [mgrant*32 +: 32];
-    wire [31:0] m_wdata = ep_wdata[mgrant*32 +: 32];
+    // host-side (WB or CPU) gmem request, latched by the hub block below
+    reg         gpend, gh_we;
+    reg  [31:0] gh_addr, gh_dat;
+    reg         ghub_done;
+    reg  [31:0] ghub_data;
 
-    reg m_busy;
+    // HBM3 pseudo-channel
+    reg         hq_req, hq_we;
+    reg  [31:0] hq_addr, hq_wdata;
+    wire        hq_done;
+    wire [31:0] hq_rdata;
+
+    hbm_ctrl u_hbm (
+        .clk(clk), .rst(rst),
+        .req(hq_req), .we(hq_we), .addr(hq_addr), .wdata(hq_wdata),
+        .done(hq_done), .rdata(hq_rdata)
+    );
+
+    localparam G_IDLE = 1'b0, G_BUSY = 1'b1;
+    reg gstate, gsrc;             // gsrc: 0 = D2D endpoint, 1 = host window
     always @(posedge clk) begin
         if (rst) begin
-            mgrant <= 0; m_busy <= 0; ep_ack <= 0;
+            mgrant <= 0; gstate <= G_IDLE; hq_req <= 0;
+            ep_ack <= 0; ghub_done <= 0;
         end else begin
-            ep_ack <= 0;
-            if (!m_busy) begin
-                if (mfound) begin mgrant <= mnxt; m_busy <= 1'b1; end
-            end else begin
-                if (ep_we[mgrant]) gmem[m_addr[15:2]] <= m_wdata;
-                ep_rdata       <= gmem[m_addr[15:2]];
-                ep_ack[mgrant] <= 1'b1;
-                m_busy         <= 1'b0;
-            end
+            ep_ack    <= 0;
+            ghub_done <= 0;
+            case (gstate)
+                G_IDLE: if (mfound) begin           // D2D first: GPU wins
+                    mgrant   <= mnxt; gsrc <= 1'b0;
+                    hq_req   <= 1'b1;
+                    hq_we    <= ep_we   [mnxt];
+                    hq_addr  <= ep_addr [mnxt*32 +: 32];
+                    hq_wdata <= ep_wdata[mnxt*32 +: 32];
+                    gstate   <= G_BUSY;
+                end else if (gpend && !ghub_done) begin
+                    gsrc     <= 1'b1;
+                    hq_req   <= 1'b1;
+                    hq_we    <= gh_we;
+                    hq_addr  <= gh_addr;
+                    hq_wdata <= gh_dat;
+                    gstate   <= G_BUSY;
+                end
+                G_BUSY: if (hq_done) begin
+                    hq_req <= 1'b0;
+                    if (!gsrc) begin
+                        ep_rdata       <= hq_rdata;
+                        ep_ack[mgrant] <= 1'b1;
+                    end else begin
+                        ghub_data <= hq_rdata;
+                        ghub_done <= 1'b1;
+                    end
+                    gstate <= G_IDLE;
+                end
+            endcase
         end
     end
 
@@ -149,26 +183,34 @@ module io_chiplet #(
 
     always @(posedge clk) begin
         if (rst) begin
-            hub_ack <= 0; cc_launch <= 0; cc_imem_we <= 0;
+            hub_ack <= 0; cc_launch <= 0; cc_imem_we <= 0; gpend <= 0;
         end else begin
             hub_ack    <= 0;
             cc_launch  <= 0;
             cc_imem_we <= 0;
-            if (hub_stb && !hub_ack) begin
-                hub_ack       <= 1'b1;
+            if (gpend && ghub_done) begin        // HBM answered the window
+                hub_rdata <= ghub_data;
+                hub_ack   <= 1'b1;
+                gpend     <= 1'b0;
+            end
+            if (hub_stb && !hub_ack && !gpend) begin
                 hub_served_wb <= hub_from_wb;
                 case (hub_nib)
-                    4'h0: begin
-                        if (hub_we) gmem[hub_adr_in[15:2]] <= hub_dat;
-                        hub_rdata <= gmem[hub_adr_in[15:2]];
+                    4'h0: begin                       // gmem: post to HBM
+                        gpend   <= 1'b1;              // ack comes on ghub_done
+                        gh_we   <= hub_we;
+                        gh_addr <= hub_adr_in;
+                        gh_dat  <= hub_dat;
                     end
                     4'h4: begin
+                        hub_ack       <= 1'b1;
                         cc_imem_we    <= hub_we;
                         cc_imem_sm    <= hub_adr_in[13:12];
                         cc_imem_waddr <= hub_adr_in[11:2];
                         cc_imem_wdata <= hub_dat;
                     end
                     4'h8: begin
+                        hub_ack <= 1'b1;
                         if (hub_adr_in[3:0] == 4'h0 && hub_we) begin
                             cc_launch <= 1'b1;
                             cc_nwarps <= hub_dat[`WARP_ID_W:0];
@@ -176,10 +218,14 @@ module io_chiplet #(
                             hub_rdata <= {31'b0, &cc_idle};
                     end
                     4'hC: begin                       // boot RAM (fw load)
+                        hub_ack <= 1'b1;
                         if (hub_we) bootram[hub_adr_in[13:2]] <= hub_dat;
                         hub_rdata <= bootram[hub_adr_in[13:2]];
                     end
-                    default: hub_rdata <= 32'hDEAD_BEEF;
+                    default: begin
+                        hub_ack   <= 1'b1;
+                        hub_rdata <= 32'hDEAD_BEEF;
+                    end
                 endcase
             end
         end

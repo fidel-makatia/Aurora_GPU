@@ -119,5 +119,5 @@ module tb_aurora_smoke;
         $finish;
     end
 
-    initial begin #500000; $display("AURORA_SMOKE_TIMEOUT"); $finish; end
+    initial begin #2000000; $display("AURORA_SMOKE_TIMEOUT"); $finish; end
 endmodule

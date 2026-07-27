@@ -64,12 +64,27 @@ plain Verilog-2001, one Genus script.
         └──────────────────────────────────────────────────────────────────┘
 ```
 
-**Memory system**: one L2 slice per compute chiplet (SM round-robin arbiter,
-local scratch bank, remote window forwarded over D2D); the hub's memory
-controller round-robins the 4 D2D endpoints into the gmem bank — the HBM
-controller/PHY drop-in point for silicon. LSU serializes per-lane global
-accesses through L2; the latency is hidden by warp switching, which is the
-whole point of SIMT.
+**Memory system — HBM3**: one L2 slice per compute chiplet (SM round-robin
+arbiter, local scratch bank, remote window forwarded over D2D); the hub
+round-robins the 4 D2D endpoints plus the host window into an **HBM3
+pseudo-channel controller** ([`rtl/hbm_ctrl.v`](rtl/hbm_ctrl.v)) — real,
+synthesizable bank-state logic: 16 word-interleaved banks, per-bank open-row
+tracking, open-page policy, HBM3-class timing (tRCD/tRP/tCL = 14 controller
+cycles @ 1 GHz, BL8 bursts). The PHY ([`rtl/hbm3_phy.v`](rtl/hbm3_phy.v)) is
+a hard-IP boundary: behavioral in simulation, interface-only for synthesis,
+with area/energy carried as declared literature bounds (an HBM PHY is vendor
+IP, and pretending otherwise would corrupt the PPA story). One pseudo-channel
+(64b DQ @ 6.4 Gbps = **51.2 GB/s**) matches Aurora's serialized demand
+(~16 SMs × 4 B/cycle ≈ 64 GB/s worst case); scaling to a full stack's 16
+pseudo-channels is gated on L2 coalescing (roadmap). LSU latency is hidden by
+warp switching, which is the whole point of SIMT.
+
+Declared capacity caveat: the behavioral store behind the PHY is 64 KB — a
+capacity-model boundary. Bank/row *behavior* is modeled from the full
+address, so access timing is HBM-shaped even though the store wraps. Note
+also that Aurora is architecturally a 32-bit machine end-to-end (GPU lane
+addresses and the RV32 host are both 32-bit), so ≤4 GB is addressable by
+design — one pseudo-channel's worth, consistently.
 
 ### SM core — 3-stage SIMT pipeline (v2, SRAM register file)
 
@@ -130,6 +145,17 @@ The external Wishbone port remains as a bring-up/debug path (firmware load at
 self-boot vs external-host mode. Unimplemented by design: DIV/REM, CSRs,
 interrupts (roadmap).
 
+**Why RV32 and not RV64?** Because nothing in the machine is 64-bit: the
+command registers, the GPU's kernel words, the SIMT lane data, and the lane
+*addresses* are all 32-bit — the GPU ISA itself can only form 32-bit
+addresses, so the whole SoC is a 4 GB machine end-to-end. RV64 would double
+the datapath, register file, and adder/mul width of a core whose job is to
+poke registers and poll a status bit, and buy zero reach until the *GPU*
+ISA goes 64-bit too. (Industry does the same: GPU management/command cores
+are routinely 32-bit even on chips with RV64 application cores.) The day
+Aurora wants >4 GB HBM visible or an MMU-backed driver stack, RV64 + a
+64-bit LDG/STG format is one coherent upgrade — tracked on the roadmap.
+
 ## 📜 ISA (20 ops, 32-bit)
 
 `[31:27] opcode | [26:22] rd | [21:17] ra | [16:12] rb | [11:0] simm12`
@@ -165,7 +191,8 @@ removed 1.49M-instance flop RF dominates the delta.
 | — register file | 1,486,744 | 0.168 mm² (46% of SM) | — | — |
 | — SIMD ALU | 129,145 | 0.010 mm² | — | — |
 | L2 slice + glue | 366,350 (131k DFF) | 0.059 mm² | **+82 ps MET** | 25.5 mW |
-| io_chiplet (hub) | 2,996,200 | 0.477 mm² | **MET (0 ps wc)** | — |
+| io_chiplet (hub, v1: WB host only) | 2,996,200 | 0.477 mm² | **MET (0 ps wc)** | — |
+| io_chiplet (v3: +RV32 CPU +HBM ctrl) | *synthesis in flight* | — | — | — |
 
 ### Full-GPU rollup
 
@@ -237,6 +264,8 @@ the macro is a synthesis black box.
 rtl/
 ├── aurora_pkg.vh          every scale knob + the ISA encoding
 ├── riscv_core.v           RV32IM host CPU (multi-cycle, ~200 lines)
+├── hbm_ctrl.v             HBM3 pseudo-channel controller (bank FSM, open-page)
+├── hbm3_phy.v             PHY hard-IP boundary (behavioral sim / bb synth)
 ├── sm_core.v              3-stage SIMT SM (warp sched · issue · EX · WB)
 ├── simd_alu.v             32-lane int32 ALU (MAD, shifts, compares)
 ├── warp_sched.v           round-robin scheduler, per-warp PC/mask
@@ -264,13 +293,17 @@ docs/ansys/                Q3D capacitance matrices + summary CSV
 - [x] Ansys Q3D 2.5D-vs-3D D2D study
 - [x] v2 SRAM register file — **1 GHz closed, −37% area**
 - [x] **RV32IM host CPU on-die** — self-boot firmware verified (`AURORA_RISCV_PASS`)
-- [ ] hub-with-CPU synthesis PPA (Genus job in flight)
+- [x] **HBM3 pseudo-channel memory controller** — bank-state FSM, open-page
+      policy, PHY as declared hard-IP boundary; both testbenches pass through it
+- [ ] hub v3 (CPU + HBM ctrl) synthesis PPA (Genus job in flight)
 - [ ] Innovus P&R: sm_core + io_chiplet die layouts (in flight)
 - [ ] SRAM macro LEF → v2 P&R
 - [ ] compute_chiplet assembly (4 SM macros + L2)
 - [ ] 2.5D interposer + 3D F2F stacked layouts
 - [ ] FP32 lane option; tensor-style MMA unit
 - [ ] RV32: interrupts + CSRs; boot RAM → SRAM macro; multi-kernel scheduler firmware
+- [ ] L2 memory coalescing → full HBM stack (16 pseudo-channels); FR-FCFS scheduling
+- [ ] 64-bit path (RV64 + 64-bit LDG/STG) when >4 GB becomes reachable
 
 ## 📄 License
 
