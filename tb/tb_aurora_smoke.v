@@ -26,7 +26,7 @@ module tb_aurora_smoke;
     wire        wb_ack, gpu_idle;
 
     aurora_top_2p5d dut (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst), .cpu_en(1'b0),   // external-host mode
         .wb_stb(wb_stb), .wb_we(wb_we), .wb_adr(wb_adr),
         .wb_dat_i(wb_dat_i), .wb_dat_o(wb_dat_o), .wb_ack(wb_ack),
         .gpu_idle(gpu_idle)

@@ -10,6 +10,7 @@
 module aurora_top_2p5d (
     input  wire        clk,
     input  wire        rst,
+    input  wire        cpu_en,    // strap: RV32 command processor self-boot
     // Wishbone host
     input  wire        wb_stb,
     input  wire        wb_we,
@@ -17,7 +18,10 @@ module aurora_top_2p5d (
     input  wire [31:0] wb_dat_i,
     output wire [31:0] wb_dat_o,
     output wire        wb_ack,
-    output wire        gpu_idle
+    output wire        gpu_idle,
+    // on-die RV32 command processor result mmio
+    output wire        fw_done,
+    output wire [31:0] fw_result
 );
     // sideband
     wire                    cc_launch;
@@ -33,9 +37,10 @@ module aurora_top_2p5d (
     wire [`NUM_CCHIP-1:0]    cc2hub_v, hub2cc_v;
 
     io_chiplet u_hub (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst), .cpu_en(cpu_en),
         .wb_stb(wb_stb), .wb_we(wb_we), .wb_adr(wb_adr),
         .wb_dat_i(wb_dat_i), .wb_dat_o(wb_dat_o), .wb_ack(wb_ack),
+        .fw_done(fw_done), .fw_result(fw_result),
         .cc_launch(cc_launch), .cc_nwarps(cc_nwarps),
         .cc_imem_we(cc_imem_we), .cc_imem_sm(cc_imem_sm),
         .cc_imem_waddr(cc_imem_waddr), .cc_imem_wdata(cc_imem_wdata),

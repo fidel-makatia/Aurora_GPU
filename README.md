@@ -9,6 +9,7 @@
 [![PDK](https://img.shields.io/badge/PDK-ASAP7%20(open)-purple.svg)](https://asap.asu.edu/)
 [![timing](https://img.shields.io/badge/sm__core%20v2-1.0%20GHz%20MET-brightgreen.svg)](#-synthesis-results-asap7-genus)
 [![threads](https://img.shields.io/badge/SIMT-512%20lanes%20%2F%204096%20threads-blue.svg)](rtl/aurora_pkg.vh)
+[![host](https://img.shields.io/badge/host%20CPU-RV32IM%20on--die-gold.svg)](rtl/riscv_core.v)
 
 *Flagship architecture, academic scale: every count is a knob in one header.*
 
@@ -23,9 +24,12 @@
 
 ---
 
-Aurora is a **SIMT GPU partitioned into chiplets**: 4 compute chiplets (4 SMs
-each) around an IO/hub die, integrated in 2.5D (interposer RDL) with a
-field-solved **3D face-to-face hybrid-bond** option. The default build is
+Aurora is a **complete GPU SoC partitioned into chiplets**: 4 compute
+chiplets (4 SMs each) around an IO/hub die that carries an **on-die RV32IM
+host CPU** — Aurora boots from its own firmware, uploads kernels, launches,
+and verifies results with no external host. Integration is 2.5D (interposer
+RDL) with a field-solved **3D face-to-face hybrid-bond** option. The default
+build is
 **512 SIMT lanes / 4,096 resident threads**; every scale knob
 (`NUM_CCHIP`, `SMS_PER_CHIP`, `WARPS`, `LANES`) lives in
 [`rtl/aurora_pkg.vh`](rtl/aurora_pkg.vh) — a flagship-instance build is a
@@ -48,8 +52,14 @@ plain Verilog-2001, one Genus script.
         │       │    D2D link: 64b payload, 4:1 serialized,  │             │
         │       │    16b/dir (5-beat request / 2-beat resp)  │             │
         │  ┌────┴──────────────┴───────────────┴─────────────┴──────────┐  │
-        │  │   IO/hub chiplet — Wishbone host IF, command processor,    │  │
-        │  │   global memory controller (HBM PHY boundary = gmem bank)  │  │
+        │  │  IO/hub chiplet                                             │  │
+        │  │  ┌──────────────────┐  ┌───────────────────────────────┐   │  │
+        │  │  │ RV32IM host CPU  │  │ command processor registers   │   │  │
+        │  │  │ + 16 KB boot RAM │──│ (kernel upload · launch ·     │   │  │
+        │  │  │ (the GPU driver, │  │  idle status)                 │   │  │
+        │  │  │  on-die)         │  └───────────────────────────────┘   │  │
+        │  │  └──────────────────┘  global memory controller (HBM PHY  │  │
+        │  │  Wishbone debug port    boundary = gmem bank)              │  │
         │  └────────────────────────────────────────────────────────────┘  │
         └──────────────────────────────────────────────────────────────────┘
 ```
@@ -94,6 +104,31 @@ whole point of SIMT.
   Functionally verified: `AURORA_SMOKE_PASS`.
 - The flop RF is retained at [`rtl/legacy/regfile_flops.v`](rtl/legacy/regfile_flops.v)
   for FPGA targets or macro-less flows.
+
+### RV32 host CPU — the GPU driver, on-die
+
+[`rtl/riscv_core.v`](rtl/riscv_core.v): RV32I + M-multiply (Zmmul),
+multi-cycle (FETCH→EXEC→MEM→WB) — a command processor is latency-, not
+throughput-critical, so the core stays tiny and closes 1 GHz trivially.
+Firmware ([`fw/cmd_proc.S`](fw/cmd_proc.S), assembled by the self-contained
+[`tools/rvasm.py`](tools/rvasm.py)) does what the external testbench host
+used to do: write test vectors to gmem, upload the SIMT kernel to all 16 SMs,
+launch, poll idle, **verify results on-die**, and report to a result mmio.
+Verified end-to-end: `AURORA_RISCV_PASS` (self-boot, zero external bus
+activity).
+
+| CPU address | Region |
+|---|---|
+| `0x0000_0000` | 16 KB boot RAM (code + data) |
+| `0x1000_0000` | global memory window |
+| `0x4000_0000` | SM instruction upload (broadcast) |
+| `0x8000_0000` | launch / idle status |
+| `0xF000_0000` | result mmio |
+
+The external Wishbone port remains as a bring-up/debug path (firmware load at
+`0xC000_0000`, full v1 host map preserved); a `cpu_en` strap selects
+self-boot vs external-host mode. Unimplemented by design: DIV/REM, CSRs,
+interrupts (roadmap).
 
 ## 📜 ISA (20 ops, 32-bit)
 
@@ -175,8 +210,13 @@ improves the normalized ratios by ~1.6× before any P&R optimization.
 ## 🚀 Build & run
 
 ```bash
-# Smoke test (Cadence Xcelium; ports to other simulators welcome)
-xrun -incdir rtl tb/tb_aurora_smoke.v rtl/*.v -define AURORA_SIM
+# Self-boot SoC test: RV32 firmware drives the GPU, no external host
+python3 tools/rvasm.py fw/cmd_proc.S fw/cmd_proc.hex
+xrun -sv -incdir rtl -define AURORA_SIM tb/tb_aurora_riscv.v rtl/*.v rtl/legacy/regfile_flops.v
+# expect: FW_RESULT 600d0000 / AURORA_RISCV_PASS
+
+# External-host smoke test (Wishbone testbench drives the same map)
+xrun -sv -incdir rtl -define AURORA_SIM tb/tb_aurora_smoke.v rtl/*.v rtl/legacy/regfile_flops.v
 # expect: AURORA_SMOKE_PASS
 
 # Synthesis (Cadence Genus + ASAP7 CCS libs; edit the two paths at the top)
@@ -196,6 +236,7 @@ the macro is a synthesis black box.
 ```
 rtl/
 ├── aurora_pkg.vh          every scale knob + the ISA encoding
+├── riscv_core.v           RV32IM host CPU (multi-cycle, ~200 lines)
 ├── sm_core.v              3-stage SIMT SM (warp sched · issue · EX · WB)
 ├── simd_alu.v             32-lane int32 ALU (MAD, shifts, compares)
 ├── warp_sched.v           round-robin scheduler, per-warp PC/mask
@@ -207,7 +248,10 @@ rtl/
 ├── io_chiplet.v           Wishbone host IF, command proc, gmem controller
 ├── aurora_top_2p5d.v      full 4+1 assembly
 └── legacy/regfile_flops.v v1 flop RF (FPGA-friendly)
-tb/tb_aurora_smoke.v       self-checking smoke kernel (exercises the ISA)
+tb/tb_aurora_riscv.v       self-boot SoC test (firmware drives everything)
+tb/tb_aurora_smoke.v       external-host smoke test (Wishbone map)
+fw/cmd_proc.S              command-processor firmware (the on-die GPU driver)
+tools/rvasm.py             self-contained two-pass RV32 assembler
 flow/genus_aurora_asap7.tcl  synthesis recipe (CCS libs, ps units)
 docs/FLAGSHIP_COMPARISON.md  normalized PPA vs H100/B200/MI300X
 docs/ansys/                Q3D capacitance matrices + summary CSV
@@ -219,11 +263,14 @@ docs/ansys/                Q3D capacitance matrices + summary CSV
 - [x] Synthesis: all blocks, ASAP7 CCS (v1)
 - [x] Ansys Q3D 2.5D-vs-3D D2D study
 - [x] v2 SRAM register file — **1 GHz closed, −37% area**
+- [x] **RV32IM host CPU on-die** — self-boot firmware verified (`AURORA_RISCV_PASS`)
+- [ ] hub-with-CPU synthesis PPA (Genus job in flight)
 - [ ] Innovus P&R: sm_core + io_chiplet die layouts (in flight)
 - [ ] SRAM macro LEF → v2 P&R
 - [ ] compute_chiplet assembly (4 SM macros + L2)
 - [ ] 2.5D interposer + 3D F2F stacked layouts
 - [ ] FP32 lane option; tensor-style MMA unit
+- [ ] RV32: interrupts + CSRs; boot RAM → SRAM macro; multi-kernel scheduler firmware
 
 ## 📄 License
 
