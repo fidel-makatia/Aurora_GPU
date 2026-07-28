@@ -42,27 +42,9 @@ plain Verilog-2001, one Genus script.
 
 ### System — 4 + 1 chiplets on an interposer
 
-```
-        ┌────────────────────── interposer (2.5D RDL, or 3D F2F) ──────────┐
-        │  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐       │
-        │  │ compute0 │   │ compute1 │   │ compute2 │   │ compute3 │       │
-        │  │  4 × SM  │   │  4 × SM  │   │  4 × SM  │   │  4 × SM  │       │
-        │  │ L2 slice │   │ L2 slice │   │ L2 slice │   │ L2 slice │       │
-        │  └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘       │
-        │       │    D2D link: 64b payload, 4:1 serialized,  │             │
-        │       │    16b/dir (5-beat request / 2-beat resp)  │             │
-        │  ┌────┴──────────────┴───────────────┴─────────────┴──────────┐  │
-        │  │  IO/hub chiplet                                             │  │
-        │  │  ┌──────────────────┐  ┌───────────────────────────────┐   │  │
-        │  │  │ RV32IM host CPU  │  │ command processor registers   │   │  │
-        │  │  │ + 16 KB boot RAM │──│ (kernel upload · launch ·     │   │  │
-        │  │  │ (the GPU driver, │  │  idle status)                 │   │  │
-        │  │  │  on-die)         │  └───────────────────────────────┘   │  │
-        │  │  └──────────────────┘  global memory controller (HBM PHY  │  │
-        │  │  Wishbone debug port    boundary = gmem bank)              │  │
-        │  └────────────────────────────────────────────────────────────┘  │
-        └──────────────────────────────────────────────────────────────────┘
-```
+<div align="center">
+<img src="docs/img/aurora_architecture.png" alt="Aurora system architecture: 4 compute chiplets (4 SMs + L2 slice each) around the IO/hub chiplet carrying the RV32IM host CPU, command processor registers, and global memory controller, connected by 64b/4:1-serialized D2D links on a 2.5D RDL or 3D F2F interposer" width="720"/>
+</div>
 
 **Memory system — HBM3**: one L2 slice per compute chiplet (SM round-robin
 arbiter, local scratch bank, remote window forwarded over D2D); the hub
