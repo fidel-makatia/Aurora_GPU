@@ -192,7 +192,12 @@ removed 1.49M-instance flop RF dominates the delta.
 | — SIMD ALU | 129,145 | 0.010 mm² | — | — |
 | L2 slice + glue | 366,350 (131k DFF) | 0.059 mm² | **+82 ps MET** | 25.5 mW |
 | io_chiplet (hub, v1: WB host only) | 2,996,200 | 0.477 mm² | **MET (0 ps wc)** | — |
-| io_chiplet (v3: +RV32 CPU +HBM ctrl) | *synthesis in flight* | — | — | — |
+| **io_chiplet (v3: +RV32 CPU +HBM ctrl)** | **771,146** | **0.120 mm²** | **MET (0 ps @ 1 GHz)** | 0.360 W * |
+
+\* v3 hub is **4× smaller** than v1: the 524k-flop gmem bank became the HBM
+PHY boundary, while *adding* the RV32 CPU (9,774 cells / 0.0011 mm²) and the
+HBM controller (869 cells). Power is boot-RAM-flop dominated (93% internal);
+the SRAM-macro boot RAM on the roadmap addresses it.
 
 ### Full-GPU rollup
 
@@ -295,8 +300,10 @@ docs/ansys/                Q3D capacitance matrices + summary CSV
 - [x] **RV32IM host CPU on-die** — self-boot firmware verified (`AURORA_RISCV_PASS`)
 - [x] **HBM3 pseudo-channel memory controller** — bank-state FSM, open-page
       policy, PHY as declared hard-IP boundary; both testbenches pass through it
-- [ ] hub v3 (CPU + HBM ctrl) synthesis PPA (Genus job in flight)
-- [ ] Innovus P&R: sm_core + io_chiplet die layouts (in flight)
+- [x] hub v3 (CPU + HBM ctrl) synthesis — **1 GHz MET, 0.120 mm², 4× smaller than v1 hub**
+- [x] Innovus P&R: io_chiplet die — **941×941 µm, GDS/LEF/SPEF out, hold clean,
+      setup WNS −0.126 ns (≈888 MHz)**; v1 sm_core die timed out at 48 h
+      fighting the flop RF → superseded by v2 (needs SRAM LEF)
 - [ ] SRAM macro LEF → v2 P&R
 - [ ] compute_chiplet assembly (4 SM macros + L2)
 - [ ] 2.5D interposer + 3D F2F stacked layouts
