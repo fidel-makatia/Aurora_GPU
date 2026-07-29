@@ -13,6 +13,13 @@ module sram_1r1w_272_256_asap7 (
     input  [271:0] w0_wd_in
 );
     reg [271:0] mem [0:255];
+`ifdef AURORA_GLS_INIT0
+    // GLS only: defined power-on state. Gate-level AOI structures leak X from
+    // never-written entries through the WB lane-merge; real silicon powers
+    // into a defined (arbitrary) state, which zero-init represents.
+    integer gi;
+    initial for (gi = 0; gi < 256; gi = gi + 1) mem[gi] = 272'b0;
+`endif
     always @(posedge clk) begin
         if (r0_ce_in) r0_rd_out <= mem[r0_addr_in];
         if (w0_ce_in && w0_we_in) mem[w0_addr_in] <= w0_wd_in;
