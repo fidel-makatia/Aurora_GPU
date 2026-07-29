@@ -276,8 +276,15 @@ Complete:
 - IO hub die: placed, routed, timing closed at 1 GHz
 
 In progress:
-- SM core v2 die (routing); gate-level simulation of synthesized netlists;
-  cycle-accurate benchmark suite
+- SM core v2 die (routing); gate-level simulation of synthesized netlists
+
+Measured ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)):
+- Compute: **995.8 GOPS sustained — 97.2% of theoretical peak** (verified
+  arithmetic, all 16 SMs)
+- On-chip shared memory: **~1.96 TB/s aggregate**
+- Global memory: 0.09 GB/s — bounded by three deliberate v1 simplifications
+  (serializing LSU, single-outstanding controller, execute gated on LSU),
+  each a defined roadmap item
 
 Planned:
 - Compute-chiplet assembly and full 4+1-chiplet GDS

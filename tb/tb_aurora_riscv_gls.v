@@ -30,6 +30,12 @@ module tb_aurora_riscv_gls;
         wait (wb_ack);  @(posedge clk); wb_stb <= 0; wb_we <= 0;
     end endtask
 
+    task wb_rd(input [31:0] a, output [31:0] d);
+    begin
+        @(posedge clk); wb_stb <= 1; wb_we <= 0; wb_adr <= a;
+        wait (wb_ack);  d = wb_dat_o; @(posedge clk); wb_stb <= 0;
+    end endtask
+
     reg [31:0] fwimg [0:4095];
     integer i;
     initial begin
@@ -40,6 +46,16 @@ module tb_aurora_riscv_gls;
                 wb_wr(32'hC000_0000 + i*4, fwimg[i]);
         $display("GLS: firmware loaded over WB debug port");
         cpu_en = 1;
+        fork begin : dbg
+            integer t;
+            reg [31:0] st;
+            for (t = 0; t < 40; t = t + 1) begin
+                repeat (2000) @(posedge clk);
+                wb_rd(32'h8000_0004, st);
+                $display("GLS_DBG t=%0dk idle=%b gpu_idle=%b fw_done=%b",
+                         (t+1)*2, st[0], gpu_idle, fw_done);
+            end
+        end join_none
         wait (fw_done); @(posedge clk);
         if (fw_result === 32'h600D_0000) $display("AURORA_GLS_HUB_PASS");
         else $display("AURORA_GLS_HUB_FAIL result=%08x", fw_result);
