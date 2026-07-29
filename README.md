@@ -1,74 +1,67 @@
 <div align="center">
 
-# ⚡ AURORA
+# AURORA
 
-### A chiplet SIMT GPU, built end-to-end in the open — RTL → synthesis → 2.5D/3D physical design
+**A chiplet-based SIMT GPU SoC, developed end-to-end in the open: RTL, firmware, synthesis, and 2.5D/3D physical design.**
 
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![RTL](https://img.shields.io/badge/RTL-Verilog--2001-orange.svg)](rtl/)
 [![PDK](https://img.shields.io/badge/PDK-ASAP7%20(open)-purple.svg)](https://asap.asu.edu/)
-[![timing](https://img.shields.io/badge/sm__core%20v2-1.0%20GHz%20MET-brightgreen.svg)](#-synthesis-results-asap7-genus)
+[![timing](https://img.shields.io/badge/SM%20core%20v2-1.0%20GHz%20timing%20met-brightgreen.svg)](#synthesis-results-asap7-cadence-genus)
 [![threads](https://img.shields.io/badge/SIMT-512%20lanes%20%2F%204096%20threads-blue.svg)](rtl/aurora_pkg.vh)
 [![host](https://img.shields.io/badge/host%20CPU-RV32IM%20on--die-gold.svg)](rtl/riscv_core.v)
 
-*Flagship architecture, academic scale: every count is a knob in one header.*
-
-[Architecture](#-architecture) •
-[ISA](#-isa-20-ops-32-bit) •
-[Results](#-synthesis-results-asap7-genus) •
-[D2D study](#-die-to-die-interconnect-ansys-q3d-field-solved) •
-[vs Flagships](#-how-it-compares-to-flagship-gpus) •
-[Build & run](#-build--run)
+[Architecture](#architecture) ·
+[ISA](#instruction-set) ·
+[Results](#synthesis-results-asap7-cadence-genus) ·
+[Interconnect study](#die-to-die-interconnect-field-solved) ·
+[Comparison](#comparison-with-production-gpus) ·
+[Build and run](#build-and-run)
 
 </div>
 
 ---
 
-Aurora is a **complete GPU SoC partitioned into chiplets**: 4 compute
-chiplets (4 SMs each) around an IO/hub die that carries an **on-die RV32IM
-host CPU** — Aurora boots from its own firmware, uploads kernels, launches,
-and verifies results with no external host. Integration is 2.5D (interposer
-RDL) with a field-solved **3D face-to-face hybrid-bond** option. The default
-build is
-**512 SIMT lanes / 4,096 resident threads**; every scale knob
-(`NUM_CCHIP`, `SMS_PER_CHIP`, `WARPS`, `LANES`) lives in
-[`rtl/aurora_pkg.vh`](rtl/aurora_pkg.vh) — a flagship-instance build is a
-header edit, not an RTL rewrite.
+Aurora is a complete GPU system-on-chip partitioned into chiplets: four
+compute chiplets (four streaming multiprocessors each) around an IO hub die
+carrying an on-die RV32IM host processor. The system boots from its own
+firmware, uploads kernels, launches them, and verifies results with no
+external host. Package integration is 2.5D (interposer RDL), with a
+field-solved 3D face-to-face hybrid-bond option.
 
-Everything here is reproducible on open technology: ASAP7 predictive PDK,
-plain Verilog-2001, one Genus script.
+The default configuration provides **512 SIMT lanes and 4,096 resident
+threads**. Every scale parameter — chiplet count, SMs per chiplet, warps,
+lanes — is defined in a single header ([`rtl/aurora_pkg.vh`](rtl/aurora_pkg.vh));
+larger configurations are a parameter change, not an RTL rewrite.
 
-## 🏗 Architecture
+The entire project is reproducible on open technology: the ASAP7 predictive
+PDK, plain Verilog-2001, and a single synthesis script.
 
-### System — 4 + 1 chiplets on an interposer
+## Architecture
+
+### System
 
 <div align="center">
-<img src="docs/img/aurora_architecture.png" alt="Aurora system architecture: 4 compute chiplets (4 SMs + L2 slice each) around the IO/hub chiplet carrying the RV32IM host CPU, command processor registers, and global memory controller, connected by 64b/4:1-serialized D2D links on a 2.5D RDL or 3D F2F interposer" width="720"/>
+<img src="docs/img/aurora_architecture.svg" alt="Aurora system architecture: four compute chiplets, each with four SMs and an L2 slice, connected by serialized die-to-die links to an IO hub chiplet carrying the RV32IM host CPU, command registers, and the HBM3 pseudo-channel memory controller" width="820"/>
 </div>
 
-**Memory system — HBM3**: one L2 slice per compute chiplet (SM round-robin
-arbiter, local scratch bank, remote window forwarded over D2D); the hub
-round-robins the 4 D2D endpoints plus the host window into an **HBM3
-pseudo-channel controller** ([`rtl/hbm_ctrl.v`](rtl/hbm_ctrl.v)) — real,
-synthesizable bank-state logic: 16 word-interleaved banks, per-bank open-row
-tracking, open-page policy, HBM3-class timing (tRCD/tRP/tCL = 14 controller
-cycles @ 1 GHz, BL8 bursts). The PHY ([`rtl/hbm3_phy.v`](rtl/hbm3_phy.v)) is
-a hard-IP boundary: behavioral in simulation, interface-only for synthesis,
-with area/energy carried as declared literature bounds (an HBM PHY is vendor
-IP, and pretending otherwise would corrupt the PPA story). One pseudo-channel
-(64b DQ @ 6.4 Gbps = **51.2 GB/s**) matches Aurora's serialized demand
-(~16 SMs × 4 B/cycle ≈ 64 GB/s worst case); scaling to a full stack's 16
-pseudo-channels is gated on L2 coalescing (roadmap). LSU latency is hidden by
-warp switching, which is the whole point of SIMT.
+**Memory system.** Each compute chiplet carries an L2 slice (SM round-robin
+arbitration, local scratch, remote window forwarded over the die-to-die
+link). The hub aggregates the four D2D endpoints and the host window into an
+HBM3 pseudo-channel controller ([`rtl/hbm_ctrl.v`](rtl/hbm_ctrl.v)):
+synthesizable bank-state logic with 16 word-interleaved banks, per-bank
+open-row tracking, an open-page policy, and HBM3-class timing parameters. The
+PHY ([`rtl/hbm3_phy.v`](rtl/hbm3_phy.v)) is treated as vendor hard IP: it is
+behavioral in simulation and interface-only in synthesis, with area and
+energy carried as declared literature bounds rather than synthesized
+approximations. One pseudo-channel (64-bit DQ at 6.4 Gb/s, 51.2 GB/s) matches
+the present core's serialized demand; scaling to a full stack is an explicit
+roadmap item gated on L2 coalescing.
 
-Declared capacity caveat: the behavioral store behind the PHY is 64 KB — a
-capacity-model boundary. Bank/row *behavior* is modeled from the full
-address, so access timing is HBM-shaped even though the store wraps. Note
-also that Aurora is architecturally a 32-bit machine end-to-end (GPU lane
-addresses and the RV32 host are both 32-bit), so ≤4 GB is addressable by
-design — one pseudo-channel's worth, consistently.
+The design is architecturally 32-bit end-to-end (GPU lane addresses and host
+CPU alike), bounding the addressable space at 4 GB by construction.
 
-### SM core — 3-stage SIMT pipeline (v2, SRAM register file)
+### SM core (v2: SRAM register file)
 
 ```
                  ┌────────────────────────────────────────────────────┐
@@ -83,217 +76,215 @@ design — one pseudo-channel's worth, consistently.
                  │  ┌─────┴──────────────┴────────────────┴───────┐  │
                  │  │ register file: 12 × 1R1W SRAM (272×256)     │  │
                  │  │ = 3 read copies (ra / rb / rd-old) × 4 banks│  │
-                 │  │ issue-stage sync reads; 3-deep same-warp    │  │
-                 │  │ interlock kills RAW hazards                 │  │
+                 │  │ issue-stage synchronous reads; 3-deep       │  │
+                 │  │ same-warp interlock                         │  │
                  │  └─────────────────────────────────────────────┘  │
-                 │  4 KB shared mem · LSU old-value latch · barrier  │
+                 │  4 KB shared memory · LSU · block barrier         │
                  └────────────────────────────────────────────────────┘
 ```
 
-- **Warp scheduler**: round-robin over 8 resident warps, per-warp PC and
-  active mask; `SETP` folds per-lane predicates into the mask, `BRA` is a
-  uniform any-active branch; `BAR` is an SM-wide block barrier.
-- **32×32b registers/thread**, 4 KB shared memory per SM.
-- **v1 → v2**: the v1 flop register file was 1.49M instances — 46% of the SM.
-  v2 swaps it for banked 1R1W SRAM macros with issue-stage synchronous reads,
-  a write-back lane-merge that replaces per-bit write masking, and a 3-deep
-  same-warp interlock (which also fixed a latent v1 single-warp RAW hazard).
-  Functionally verified: `AURORA_SMOKE_PASS`.
-- The flop RF is retained at [`rtl/legacy/regfile_flops.v`](rtl/legacy/regfile_flops.v)
-  for FPGA targets or macro-less flows.
+- Round-robin scheduling over eight resident warps with per-warp program
+  counter and active mask. `SETP` folds per-lane predicates into the mask;
+  `BRA` is a uniform any-active branch; `BAR` is an SM-wide barrier.
+- 32 × 32-bit registers per thread; 4 KB shared memory per SM.
+- The v1 flop-based register file accounted for 46% of SM area (1.49M
+  instances). v2 replaces it with banked 1R1W SRAM macros, a write-back
+  lane-merge in place of per-bit write masking, and a three-deep same-warp
+  interlock (which also closed a latent v1 read-after-write hazard). The
+  flop-based file is retained under [`rtl/legacy/`](rtl/legacy/) for FPGA
+  targets and macro-less flows.
 
-### RV32 host CPU — the GPU driver, on-die
+### Host processor
 
-[`rtl/riscv_core.v`](rtl/riscv_core.v): RV32I + M-multiply (Zmmul),
-multi-cycle (FETCH→EXEC→MEM→WB) — a command processor is latency-, not
-throughput-critical, so the core stays tiny and closes 1 GHz trivially.
-Firmware ([`fw/cmd_proc.S`](fw/cmd_proc.S), assembled by the self-contained
-[`tools/rvasm.py`](tools/rvasm.py)) does what the external testbench host
-used to do: write test vectors to gmem, upload the SIMT kernel to all 16 SMs,
-launch, poll idle, **verify results on-die**, and report to a result mmio.
-Verified end-to-end: `AURORA_RISCV_PASS` (self-boot, zero external bus
-activity).
+[`rtl/riscv_core.v`](rtl/riscv_core.v) implements RV32I with the M-extension
+multiply set as a multi-cycle core. A command processor is latency- rather
+than throughput-critical; the multi-cycle organization keeps the core small
+(9,774 cells, 0.0011 mm²) and closes 1 GHz without effort. Firmware
+([`fw/cmd_proc.S`](fw/cmd_proc.S), assembled by the self-contained
+[`tools/rvasm.py`](tools/rvasm.py)) performs the full driver sequence:
+initialize memory, upload the kernel to all 16 SMs, launch, poll idle, verify
+results on-die, and report through a result register. Verified end-to-end in
+simulation with no external bus activity.
 
 | CPU address | Region |
 |---|---|
-| `0x0000_0000` | 16 KB boot RAM (code + data) |
+| `0x0000_0000` | 16 KB boot RAM (code and data) |
 | `0x1000_0000` | global memory window |
 | `0x4000_0000` | SM instruction upload (broadcast) |
 | `0x8000_0000` | launch / idle status |
-| `0xF000_0000` | result mmio |
+| `0xF000_0000` | result register |
 
-The external Wishbone port remains as a bring-up/debug path (firmware load at
-`0xC000_0000`, full v1 host map preserved); a `cpu_en` strap selects
-self-boot vs external-host mode. Unimplemented by design: DIV/REM, CSRs,
-interrupts (roadmap).
+The external Wishbone interface is retained as a bring-up and debug port
+(firmware load at `0xC000_0000`; the complete v1 host register map is
+preserved). A `cpu_en` strap selects self-boot or external-host operation.
 
-**Why RV32 and not RV64?** Because nothing in the machine is 64-bit: the
-command registers, the GPU's kernel words, the SIMT lane data, and the lane
-*addresses* are all 32-bit — the GPU ISA itself can only form 32-bit
-addresses, so the whole SoC is a 4 GB machine end-to-end. RV64 would double
-the datapath, register file, and adder/mul width of a core whose job is to
-poke registers and poll a status bit, and buy zero reach until the *GPU*
-ISA goes 64-bit too. (Industry does the same: GPU management/command cores
-are routinely 32-bit even on chips with RV64 application cores.) The day
-Aurora wants >4 GB HBM visible or an MMU-backed driver stack, RV64 + a
-64-bit LDG/STG format is one coherent upgrade — tracked on the roadmap.
+**On RV32 rather than RV64.** Nothing in the machine is 64-bit: command
+registers, kernel words, lane data, and lane addresses are all 32-bit, so the
+SoC addresses at most 4 GB by construction. A 64-bit host would double the
+datapath and register file of a core whose role is register access and status
+polling, with no gain in reach until the GPU ISA itself widens. When a larger
+address space is required, RV64 and a 64-bit load/store format are one
+coherent, planned upgrade.
 
-## 📜 ISA (20 ops, 32-bit)
+## Instruction set
 
+20 operations, 32-bit encoding:
 `[31:27] opcode | [26:22] rd | [21:17] ra | [16:12] rb | [11:0] simm12`
 
-| Class | Ops |
+| Class | Operations |
 |---|---|
-| ALU | `ADD SUB MUL MAD AND OR XOR SHL SHR MOVI` |
-| Memory | `LDG STG` (global, per-lane address) · `LDS STS` (4 KB shared) |
-| Control | `SETP` (predicate→mask) · `BRA` (uniform) · `BAR` (SM barrier) · `EXIT` |
-| Special | `TID` (global thread id: chip‹‹14 \| sm‹‹11 \| warp‹‹5 \| lane) · `NOP` |
+| Arithmetic and logic | `ADD SUB MUL MAD AND OR XOR SHL SHR MOVI` |
+| Memory | `LDG STG` (global, per-lane addressing) · `LDS STS` (shared) |
+| Control | `SETP` (predicate to mask) · `BRA` (uniform) · `BAR` · `EXIT` |
+| Special | `TID` (global thread ID) · `NOP` |
 
-## 📊 Synthesis results (ASAP7, Genus)
+## Synthesis results (ASAP7, Cadence Genus)
 
-### sm_core: v1 (flop RF) vs v2 (SRAM RF) — 1 GHz target, TT corner
+### SM core: v1 (flop register file) versus v2 (SRAM register file), 1 GHz target, TT corner
 
-| Metric | v1 | **v2** | Δ |
+| Metric | v1 | v2 | Change |
 |---|---|---|---|
-| Leaf cells | 3,637,886 | **2,102,408** | **−42%** |
-| Area | 0.365 mm² | **0.229 mm²** (incl. 12 SRAM macros, 0.035 mm²) | **−37%** |
-| Worst slack @ 1 GHz | −65 ps (Fmax ≈ 940 MHz) | **0 ps — MET, 1.0 GHz** | closes timing |
-| Power @ 1 GHz | 0.882 W (≈50% in the flop RF) | **0.229 W** * | −74% * |
-| Critical path | `ex_ir_reg → SIMD ALU → wb_data_reg[383]` (996 ps) | balanced | — |
+| Leaf cells | 3,637,886 | 2,102,408 | −42% |
+| Area | 0.365 mm² | 0.229 mm² (incl. 12 SRAM macros, 0.035 mm²) | −37% |
+| Worst slack at 1 GHz | −65 ps (≈ 940 MHz) | **0 ps — timing met at 1.0 GHz** | closed |
+| Power at 1 GHz | 0.882 W (≈ 50% in the register file) | 0.229 W ¹ | −74% ¹ |
 
-\* v2 macro power comes from a fakeram-derived liberty (crude model): the
-logic split is reliable, the macro contribution approximate. Either way the
-removed 1.49M-instance flop RF dominates the delta.
+¹ v2 macro power derives from a generated memory-compiler liberty with a
+simplified power model; the logic contribution is reliable, the macro
+contribution approximate. The removed 1.49M-instance flop register file
+dominates the difference in either reading.
 
-### All blocks (v1 baseline)
+### All blocks
 
 | Block | Cells | Area | Timing | Power |
 |---|---|---|---|---|
-| sm_core (1 SM) | 3,637,886 | 0.365 mm² | −65 ps → 940 MHz | 0.882 W |
+| SM core (1 SM, v1) | 3,637,886 | 0.365 mm² | −65 ps (≈ 940 MHz) | 0.882 W |
 | — register file | 1,486,744 | 0.168 mm² (46% of SM) | — | — |
 | — SIMD ALU | 129,145 | 0.010 mm² | — | — |
-| L2 slice + glue | 366,350 (131k DFF) | 0.059 mm² | **+82 ps MET** | 25.5 mW |
-| io_chiplet (hub, v1: WB host only) | 2,996,200 | 0.477 mm² | **MET (0 ps wc)** | — |
-| **io_chiplet (v3: +RV32 CPU +HBM ctrl)** | **771,146** | **0.120 mm²** | **MET (0 ps @ 1 GHz)** | 0.360 W * |
+| L2 slice and glue | 366,350 | 0.059 mm² | +82 ps, met | 25.5 mW |
+| IO hub, v1 (external host only) | 2,996,200 | 0.477 mm² | met (0 ps worst) | — |
+| **IO hub, v3 (RV32 CPU + HBM controller)** | **771,146** | **0.120 mm²** | **met (0 ps at 1 GHz)** | 0.360 W ² |
 
-\* v3 hub is **4× smaller** than v1: the 524k-flop gmem bank became the HBM
-PHY boundary, while *adding* the RV32 CPU (9,774 cells / 0.0011 mm²) and the
-HBM controller (869 cells). Power is boot-RAM-flop dominated (93% internal);
-the SRAM-macro boot RAM on the roadmap addresses it.
+² Dominated (93% internal) by the boot RAM implemented in flops; an SRAM
+boot macro is a planned change.
 
-### Full-GPU rollup
+The v3 hub is four times smaller than v1: replacing the on-die scratch bank
+with the HBM PHY boundary recovered far more area than the RV32 subsystem
+(9,774 cells) and HBM controller (869 cells) consumed.
 
-| | |
+### Physical design (Cadence Innovus, ASAP7)
+
+| Die | Result |
 |---|---|
-| compute_chiplet (4×SM + L2) | ≈ 14.9M cells / 1.52 mm² |
-| **Aurora total (4 compute + 1 hub)** | ≈ **62.6M cells / ~6.6 mm² logic / ~14 W** |
-| Clock | 940 MHz (v1) → **1.0 GHz (v2)** |
-| Peak throughput | 0.48 TOPS int32 (0.96 TOPS counting MAD as 2 ops) |
+| IO hub v3 | **Complete: 477.8 × 477.6 µm (0.228 mm²), post-route WNS +0.118 ns setup / +0.246 ns hold, TNS 0.000 — 1 GHz closed.** GDS, LEF abstract, SPEF, and netlist delivered. |
+| IO hub v1 | Complete: 941 × 941 µm, post-route WNS −0.126 ns (≈ 888 MHz), hold clean. |
+| SM core v2 | In progress (SRAM macros placed; routing). |
+| SM core v1 | Discontinued: did not close within 48 h against the flop register file; superseded by v2. |
 
-## 🔬 Die-to-die interconnect (Ansys Q3D, field-solved)
+## Die-to-die interconnect (field-solved)
 
-Raw capacitance matrices in [`docs/ansys/`](docs/ansys/). Energy = ½CV² at
-0.7 V, wire/channel only (no PHY):
+Capacitance matrices extracted with Ansys Q3D; raw data in
+[`docs/ansys/`](docs/ansys/). Energy is ½CV² at 0.7 V, wire/channel only
+(no PHY circuitry):
 
-| Link | C_self | C_mutual | Crosstalk | **Energy/bit** |
+| Link | C_self | C_mutual | Crosstalk | Energy per bit |
 |---|---|---|---|---|
-| **3D F2F hybrid bond** (5 µm pad, 10 µm pitch) | 10.96 fF | 0.0001 fF | **0.001%** | **2.69 fJ** |
+| 3D face-to-face hybrid bond (5 µm pad, 10 µm pitch) | 10.96 fF | 0.0001 fF | 0.001% | **2.69 fJ** |
 | 2.5D RDL, 200 µm | 15.54 fF | 4.01 fF | 25.8% | 3.81 fJ |
 | 2.5D RDL, 500 µm | 38.50 fF | 9.98 fF | 25.9% | 9.43 fJ |
 | 2.5D RDL, 1 mm | 75.92 fF | 18.76 fF | 24.7% | 18.6 fJ |
 | 2.5D RDL, 2 mm | 149.11 fF | 36.25 fF | 24.3% | 36.5 fJ |
 
-The 3D face-to-face option is **~7–14× lower energy** than same-package 2.5D
-routing at practical reaches, with crosstalk four orders of magnitude lower —
-field-solved evidence for why vertical integration wins the D2D game.
+At practical reaches, the 3D face-to-face option carries roughly 7–14× lower
+channel energy than same-package 2.5D routing, with crosstalk four orders of
+magnitude lower — quantitative support for vertical integration in
+die-to-die interconnect.
 
-## 🥊 How it compares to flagship GPUs
+## Comparison with production GPUs
 
-Full analysis with caveats: [`docs/FLAGSHIP_COMPARISON.md`](docs/FLAGSHIP_COMPARISON.md).
-Headline (v1 numbers, normalized — Aurora is ~2,500× smaller in absolute silicon):
+Full analysis, including all caveats, in
+[`docs/FLAGSHIP_COMPARISON.md`](docs/FLAGSHIP_COMPARISON.md). Aurora is
+approximately 2,500× smaller than a production flagship in absolute silicon;
+the meaningful comparison is normalized (v1 figures):
 
-| Metric | Aurora | H100 FP32 | Ratio |
+| Metric | Aurora | H100 (FP32) | Ratio |
 |---|---|---|---|
-| Throughput / area | 73 GOPS/mm² (146 w/ MAD) | 82 GFLOPS/mm² | **0.9–1.8×** |
-| Throughput / power | 34 GOPS/W (69 w/ MAD) | 96 GFLOPS/W | 0.36–0.72× |
+| Throughput per area | 73 GOPS/mm² (146 counting MAD as two ops) | 82 GFLOPS/mm² | 0.9–1.8× |
+| Throughput per power | 34 GOPS/W (69 counting MAD as two ops) | 96 GFLOPS/W | 0.36–0.72× |
 
-Declared caveats: predictive PDK, post-synthesis power, int32 ops vs IEEE
-FP32, and no HBM subsystem in Aurora's budget. The v2 area gain (−37%)
-improves the normalized ratios by ~1.6× before any P&R optimization.
+Declared caveats: predictive PDK; post-synthesis power; 32-bit integer
+operations compared against IEEE FP32; no HBM subsystem in Aurora's area and
+power budget. The v2 area reduction improves the normalized ratios by
+approximately 1.6× before physical-design optimization.
 
-## 🚀 Build & run
+## Build and run
 
 ```bash
-# Self-boot SoC test: RV32 firmware drives the GPU, no external host
+# Self-boot SoC test: RV32 firmware drives the GPU with no external host
 python3 tools/rvasm.py fw/cmd_proc.S fw/cmd_proc.hex
 xrun -sv -incdir rtl -define AURORA_SIM tb/tb_aurora_riscv.v rtl/*.v rtl/legacy/regfile_flops.v
-# expect: FW_RESULT 600d0000 / AURORA_RISCV_PASS
+# expected: FW_RESULT 600d0000 / AURORA_RISCV_PASS
 
-# External-host smoke test (Wishbone testbench drives the same map)
+# External-host test (Wishbone testbench, same register map)
 xrun -sv -incdir rtl -define AURORA_SIM tb/tb_aurora_smoke.v rtl/*.v rtl/legacy/regfile_flops.v
-# expect: AURORA_SMOKE_PASS
+# expected: AURORA_SMOKE_PASS
 
-# Synthesis (Cadence Genus + ASAP7 CCS libs; edit the two paths at the top)
+# Synthesis (Cadence Genus with ASAP7 CCS libraries; set the two paths at the top)
 genus -batch -files flow/genus_aurora_asap7.tcl
 ```
 
-The smoke test uploads a vector-add kernel over Wishbone, launches 2 warps/SM
-on all 16 SMs, polls idle, and checks `c[i] = a[i] + b[i]` through the full
-SM → L2 → D2D → hub round-trip.
+`AURORA_SIM` selects the behavioral SRAM model; without it the macro is a
+synthesis black box. The self-boot test uploads a vector-add kernel over the
+full SM → L2 → D2D → hub path and verifies results on-die.
 
-`AURORA_SIM` selects the behavioral SRAM model in
-[`rtl/sram_1r1w_272_256_asap7.v`](rtl/sram_1r1w_272_256_asap7.v); without it
-the macro is a synthesis black box.
-
-## 📦 Repository
+## Repository
 
 ```
 rtl/
-├── aurora_pkg.vh          every scale knob + the ISA encoding
-├── riscv_core.v           RV32IM host CPU (multi-cycle, ~200 lines)
-├── hbm_ctrl.v             HBM3 pseudo-channel controller (bank FSM, open-page)
-├── hbm3_phy.v             PHY hard-IP boundary (behavioral sim / bb synth)
-├── sm_core.v              3-stage SIMT SM (warp sched · issue · EX · WB)
-├── simd_alu.v             32-lane int32 ALU (MAD, shifts, compares)
-├── warp_sched.v           round-robin scheduler, per-warp PC/mask
-├── regfile_sram.v         v2 RF: 3 read copies × 4 banks, 1R1W SRAMs
-├── sram_1r1w_272_256_asap7.v  behavioral model / black box
-├── l2_slice.v             per-chiplet L2 + request arbitration
-├── d2d_link.v             64b payload, 4:1 serialized die-to-die link
-├── compute_chiplet.v      4 × SM + L2 slice + D2D endpoint
-├── io_chiplet.v           Wishbone host IF, command proc, gmem controller
-├── aurora_top_2p5d.v      full 4+1 assembly
-└── legacy/regfile_flops.v v1 flop RF (FPGA-friendly)
-tb/tb_aurora_riscv.v       self-boot SoC test (firmware drives everything)
-tb/tb_aurora_smoke.v       external-host smoke test (Wishbone map)
-fw/cmd_proc.S              command-processor firmware (the on-die GPU driver)
-tools/rvasm.py             self-contained two-pass RV32 assembler
-flow/genus_aurora_asap7.tcl  synthesis recipe (CCS libs, ps units)
-docs/FLAGSHIP_COMPARISON.md  normalized PPA vs H100/B200/MI300X
-docs/ansys/                Q3D capacitance matrices + summary CSV
+├── aurora_pkg.vh              scale parameters and ISA encoding
+├── riscv_core.v               RV32IM host CPU (multi-cycle)
+├── hbm_ctrl.v                 HBM3 pseudo-channel controller
+├── hbm3_phy.v                 PHY hard-IP boundary (behavioral in simulation)
+├── sm_core.v                  SIMT streaming multiprocessor
+├── simd_alu.v                 32-lane integer ALU
+├── warp_sched.v               round-robin warp scheduler
+├── regfile_sram.v             v2 register file (3 read copies × 4 banks)
+├── sram_1r1w_272_256_asap7.v  SRAM macro model / black box
+├── l2_slice.v                 per-chiplet L2 and request arbitration
+├── d2d_link.v                 serialized die-to-die link
+├── compute_chiplet.v          4 × SM + L2 + D2D endpoint
+├── io_chiplet.v               hub: host CPU, command registers, memory
+├── aurora_top_2p5d.v          full system assembly
+└── legacy/regfile_flops.v     v1 register file (FPGA-friendly)
+tb/                            self-checking testbenches (self-boot, external host, benchmarks)
+fw/cmd_proc.S                  command-processor firmware
+tools/rvasm.py                 self-contained RV32 assembler
+flow/genus_aurora_asap7.tcl    synthesis recipe
+docs/FLAGSHIP_COMPARISON.md    normalized comparison and caveats
+docs/ansys/                    Q3D capacitance matrices
 ```
 
-## 🗺 Roadmap
+## Status and roadmap
 
-- [x] RTL + self-checking smoke test
-- [x] Synthesis: all blocks, ASAP7 CCS (v1)
-- [x] Ansys Q3D 2.5D-vs-3D D2D study
-- [x] v2 SRAM register file — **1 GHz closed, −37% area**
-- [x] **RV32IM host CPU on-die** — self-boot firmware verified (`AURORA_RISCV_PASS`)
-- [x] **HBM3 pseudo-channel memory controller** — bank-state FSM, open-page
-      policy, PHY as declared hard-IP boundary; both testbenches pass through it
-- [x] hub v3 (CPU + HBM ctrl) synthesis — **1 GHz MET, 0.120 mm², 4× smaller than v1 hub**
-- [x] Innovus P&R: io_chiplet die — **941×941 µm, GDS/LEF/SPEF out, hold clean,
-      setup WNS −0.126 ns (≈888 MHz)**; v1 sm_core die timed out at 48 h
-      fighting the flop RF → superseded by v2 (needs SRAM LEF)
-- [ ] SRAM macro LEF → v2 P&R
-- [ ] compute_chiplet assembly (4 SM macros + L2)
-- [ ] 2.5D interposer + 3D F2F stacked layouts
-- [ ] FP32 lane option; tensor-style MMA unit
-- [ ] RV32: interrupts + CSRs; boot RAM → SRAM macro; multi-kernel scheduler firmware
-- [ ] L2 memory coalescing → full HBM stack (16 pseudo-channels); FR-FCFS scheduling
-- [ ] 64-bit path (RV64 + 64-bit LDG/STG) when >4 GB becomes reachable
+Complete:
+- RTL with self-checking verification (self-boot and external-host modes)
+- Synthesis of all blocks on ASAP7 (CCS libraries)
+- v2 SM core: 1 GHz closed, −37% area
+- On-die RV32IM host processor with verified firmware bring-up
+- HBM3 pseudo-channel memory controller; verified in both test modes
+- Ansys Q3D die-to-die interconnect study (2.5D and 3D)
+- IO hub die: placed, routed, timing closed at 1 GHz
 
-## 📄 License
+In progress:
+- SM core v2 die (routing); gate-level simulation of synthesized netlists;
+  cycle-accurate benchmark suite
+
+Planned:
+- Compute-chiplet assembly and full 4+1-chiplet GDS
+- L2 memory coalescing; multi-pseudo-channel HBM; non-blocking LSU
+- SRAM boot ROM; interrupts and CSRs; multi-kernel scheduling firmware
+- FP32 datapath option; RV64 with 64-bit load/store when the address space requires it
+
+## License
 
 [MIT](LICENSE) © 2026 Fidel Makatia
