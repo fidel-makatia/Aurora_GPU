@@ -217,9 +217,8 @@ module io_chiplet #(
                         end else
                             hub_rdata <= {31'b0, &cc_idle};
                     end
-                    4'hC: begin                       // boot RAM (fw load)
+                    4'hC: begin      // boot RAM (fw load; write in u_bootram_wr)
                         hub_ack <= 1'b1;
-                        if (hub_we) bootram[hub_adr_in[13:2]] <= hub_dat;
                         hub_rdata <= bootram[hub_adr_in[13:2]];
                     end
                     default: begin
@@ -247,18 +246,25 @@ module io_chiplet #(
     reg [31:0] cpu_rdata_r;
     wire       cpu_hub_ack = hub_ack && !hub_served_wb;
 
+    // ---- boot RAM single write process (a reg array written from two
+    // blocks synthesizes into TWO shorted flop banks -- found at GLS) ----
+    always @(posedge clk) begin
+        if (cpu_boot && !cpu_ack_r && cpu_we) begin
+            if (cpu_be[0]) bootram[cpu_addr[13:2]][7:0]   <= cpu_wdata[7:0];
+            if (cpu_be[1]) bootram[cpu_addr[13:2]][15:8]  <= cpu_wdata[15:8];
+            if (cpu_be[2]) bootram[cpu_addr[13:2]][23:16] <= cpu_wdata[23:16];
+            if (cpu_be[3]) bootram[cpu_addr[13:2]][31:24] <= cpu_wdata[31:24];
+        end else if (hub_stb && !hub_ack && !gpend && hub_nib == 4'hC && hub_we)
+            bootram[hub_adr_in[13:2]] <= hub_dat;
+    end
+
+
     always @(posedge clk) begin
         if (rst) begin
             cpu_ack_r <= 0; fw_done <= 0; fw_result <= 0;
         end else begin
             cpu_ack_r <= 0;
             if (cpu_boot && !cpu_ack_r) begin
-                if (cpu_we) begin
-                    if (cpu_be[0]) bootram[cpu_addr[13:2]][7:0]   <= cpu_wdata[7:0];
-                    if (cpu_be[1]) bootram[cpu_addr[13:2]][15:8]  <= cpu_wdata[15:8];
-                    if (cpu_be[2]) bootram[cpu_addr[13:2]][23:16] <= cpu_wdata[23:16];
-                    if (cpu_be[3]) bootram[cpu_addr[13:2]][31:24] <= cpu_wdata[31:24];
-                end
                 cpu_rdata_r <= bootram[cpu_addr[13:2]];
                 cpu_ack_r   <= 1'b1;
             end else if (cpu_mmio && !cpu_ack_r) begin
