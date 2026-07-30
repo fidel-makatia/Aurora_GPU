@@ -32,7 +32,7 @@ module d2d_tx (
 
     always @(posedge clk) begin
         if (rst) begin
-            tx_v <= 0; ack <= 0; sending <= 0; waiting <= 0;
+            tx_v <= 0; tx_d <= 0; ack <= 0; sending <= 0; waiting <= 0;
             tx_beat <= 0; rx_beat <= 0;
         end else begin
             ack <= 1'b0;
@@ -94,6 +94,7 @@ module d2d_rx (
 
     always @(posedge clk) begin
         if (rst) begin
+            tx_d <= 0;
             beat <= 0; req <= 0; tx_v <= 0; resp <= 0; rbeat <= 0;
         end else begin
             // collect 5 request beats
