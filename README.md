@@ -275,8 +275,14 @@ Complete:
 - Ansys Q3D die-to-die interconnect study (2.5D and 3D)
 - IO hub die: placed, routed, timing closed at 1 GHz
 
+Complete (verification):
+- **Gate-level simulation of every synthesized netlist: hub (firmware
+  bring-up through the debug port), SM core v2, and RV32 core — all PASS**
+  ([`docs/GLS_REPORT.md`](docs/GLS_REPORT.md)); three RTL defects found and
+  fixed in the process
+
 In progress:
-- SM core v2 die (routing); gate-level simulation of synthesized netlists
+- SM core v2 die (routing)
 
 Measured ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)):
 - Compute: **995.8 GOPS sustained — 97.2% of theoretical peak** (verified
