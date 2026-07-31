@@ -37,6 +37,19 @@ larger configurations are a parameter change, not an RTL rewrite.
 The entire project is reproducible on open technology: the ASAP7 predictive
 PDK, plain Verilog-2001, and a single synthesis script.
 
+## Verified results at a glance
+
+| Category | Result | Evidence |
+|---|---|---|
+| Sustained compute | **995.8 GOPS — 97.2% of theoretical peak** (verified arithmetic, 16 SMs) | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
+| On-chip bandwidth | **≈ 1.96 TB/s** shared-memory aggregate | benchmarks |
+| Kernel launch overhead | 26 cycles | benchmarks |
+| Gate-level verification | **All synthesized netlists PASS** — hub (firmware bring-up over the debug port), SM core, RV32 host | [`docs/GLS_REPORT.md`](docs/GLS_REPORT.md) |
+| SM core v2 synthesis | 1.0 GHz timing met · 0.229 mm² · −37% vs v1 | this page |
+| IO hub v3 die (place and route) | **1 GHz closed post-route** (WNS +0.118 ns) · 0.228 mm² die | this page |
+| Die-to-die channel energy | **2.69 fJ/bit** (3D hybrid bond, field-solved) | Q3D study below |
+| Host bring-up | RV32 firmware boots, uploads, launches, verifies — zero external bus activity | GLS report |
+
 ## Architecture
 
 ### System
@@ -200,22 +213,58 @@ channel energy than same-package 2.5D routing, with crosstalk four orders of
 magnitude lower — quantitative support for vertical integration in
 die-to-die interconnect.
 
-## Comparison with production GPUs
+## Comparison with NVIDIA and AMD
 
 Full analysis, including all caveats, in
-[`docs/FLAGSHIP_COMPARISON.md`](docs/FLAGSHIP_COMPARISON.md). Aurora is
-approximately 2,500× smaller than a production flagship in absolute silicon;
-the meaningful comparison is normalized (v1 figures):
+[`docs/FLAGSHIP_COMPARISON.md`](docs/FLAGSHIP_COMPARISON.md).
 
-| Metric | Aurora | H100 (FP32) | Ratio |
-|---|---|---|---|
-| Throughput per area | 73 GOPS/mm² (146 counting MAD as two ops) | 82 GFLOPS/mm² | 0.9–1.8× |
-| Throughput per power | 34 GOPS/W (69 counting MAD as two ops) | 96 GFLOPS/W | 0.36–0.72× |
+**Scale context (absolute numbers, honesty first).** Aurora is an academic-
+scale implementation — roughly 2,500× smaller than a production flagship in
+absolute silicon. The absolute row exists to keep the normalized comparison
+honest, not to compete with it:
+
+| | Aurora (this work) | NVIDIA H100 SXM | NVIDIA B200 | AMD MI300X |
+|---|---|---|---|---|
+| Process | ASAP7 (7 nm predictive, academic) | TSMC 4N | TSMC 4NP (dual die) | 5 nm + 6 nm chiplets |
+| Transistors | ≈ 0.3 B (est.) | 80 B | 208 B | 153 B |
+| Logic area | 6.6 mm² (v1) / ≈ 4.1 mm² (v2 basis) | 814 mm² | ≈ 2 × 800 mm² | 1017 mm² |
+| Parallel lanes | 512 (4,096 threads) | 16,896 FP32 cores | ≈ 2× H100 class | 19,456 lanes |
+| Clock | 1.0 GHz (v2, closed) | ≈ 1.98 GHz boost | ≈ 1.8+ GHz | 2.1 GHz |
+| Power | ≈ 14 W (synthesis est., v1) | 700 W | 1,000 W | 750 W |
+| Peak throughput | 0.48 TOPS int32 (0.96 counting MAD as 2) | 67 TFLOPS FP32 | 9,000 TFLOPS dense FP8 | 163 TFLOPS FP32 |
+| Integration | 2.5D interposer + 3D F2F option | monolithic | 2-die NV-HBI | 2.5D + 3D hybrid |
+
+**Normalized efficiency (the meaningful comparison).**
+
+| Metric | Aurora v1 | Aurora v2 basis ¹ | H100 (FP32) | MI300X (FP32) |
+|---|---|---|---|---|
+| Throughput / area | 73 GOPS/mm² (146 w/ MAD-as-2) | ≈ 117 (234) GOPS/mm² | 82 GFLOPS/mm² | ≈ 160 GFLOPS/mm² |
+| Throughput / power | 34 GOPS/W (69 w/ MAD-as-2) | — ² | 96 GFLOPS/W | ≈ 217 GFLOPS/W |
+
+At synthesis stage, on a predictive PDK, a hand-written 20-op SIMT machine
+lands **within roughly 1–2× of H100-class area efficiency** (and, on the v2
+area basis, at or above it), and within ≈ 0.7–2× of MI300X area efficiency —
+with 97.2% of its own peak *measured*, not asserted. Power efficiency trails
+the flagships by ≈ 1.4–6×, which is the expected cost of no clock gating, no
+DVFS, and default-activity power estimation.
+
+**Interconnect, where the comparison favors this work**: Aurora's 3D
+face-to-face die-to-die channel is field-solved at **2.69 fJ/bit** —
+one to two orders of magnitude below full-PHY figures published for UCIe
+advanced package (≈ 250–500 fJ/bit) and NVLink-C2C class links
+(≈ 1,300 fJ/bit), with the wire-vs-full-PHY caveat stated in the full
+analysis.
 
 Declared caveats: predictive PDK; post-synthesis power; 32-bit integer
 operations compared against IEEE FP32; no HBM subsystem in Aurora's area and
-power budget. The v2 area reduction improves the normalized ratios by
-approximately 1.6× before physical-design optimization.
+power budget; flagship figures are vendor-published peaks.
+
+¹ v2 area basis: the measured −37% SM area and −75% hub area applied to the
+v1 rollup (≈ 4.1 mm² total); throughput unchanged. Synthesis areas, not
+routed die areas.
+² v2 macro power comes from a simplified memory-compiler model; a
+power-efficiency claim on that basis would not be honest. v1 power figures
+stand until routed v2 power is extracted.
 
 ## Build and run
 
